@@ -57,11 +57,15 @@ static u_char ngx_http_msie_refresh_tail[] =
 "\"></head><body></body></html>" CRLF;
 
 
+static u_char ngx_http_error_30X_end[] = "\">New location</a></center>" CRLF;
+
+
 static char ngx_http_error_301_page[] =
 "<html>" CRLF
 "<head><title>301 Moved Permanently</title></head>" CRLF
 "<body>" CRLF
 "<center><h1>301 Moved Permanently</h1></center>" CRLF
+"<center><a href=\""
 ;
 
 
@@ -70,6 +74,7 @@ static char ngx_http_error_302_page[] =
 "<head><title>302 Found</title></head>" CRLF
 "<body>" CRLF
 "<center><h1>302 Found</h1></center>" CRLF
+"<center><a href=\""
 ;
 
 
@@ -86,6 +91,7 @@ static char ngx_http_error_307_page[] =
 "<head><title>307 Temporary Redirect</title></head>" CRLF
 "<body>" CRLF
 "<center><h1>307 Temporary Redirect</h1></center>" CRLF
+"<center><a href=\""
 ;
 
 
@@ -94,6 +100,7 @@ static char ngx_http_error_308_page[] =
 "<head><title>308 Permanent Redirect</title></head>" CRLF
 "<body>" CRLF
 "<center><h1>308 Permanent Redirect</h1></center>" CRLF
+"<center><a href=\""
 ;
 
 
@@ -673,12 +680,16 @@ static ngx_int_t
 ngx_http_send_special_response(ngx_http_request_t *r,
     ngx_http_core_loc_conf_t *clcf, ngx_uint_t err)
 {
-    u_char       *tail;
-    size_t        len;
-    ngx_int_t     rc;
-    ngx_buf_t    *b;
-    ngx_uint_t    msie_padding;
-    ngx_chain_t   out[3];
+    u_char                    *tail;
+    size_t                     len;
+    ngx_str_t                  host;
+    ngx_int_t                  rc;
+    ngx_buf_t                 *b;
+    ngx_uint_t                 msie_padding, port;
+    ngx_chain_t                out[5];
+    ngx_connection_t          *c;
+    ngx_http_core_srv_conf_t  *cscf;
+    u_char                     addr[NGX_SOCKADDR_STRLEN];
 
     if (clcf->server_tokens == NGX_HTTP_SERVER_TOKENS_ON) {
         len = sizeof(ngx_http_error_full_tail) - 1;
@@ -697,6 +708,75 @@ ngx_http_send_special_response(ngx_http_request_t *r,
 
     if (ngx_http_error_pages[err].len) {
         r->headers_out.content_length_n = ngx_http_error_pages[err].len + len;
+        /* 301, 302, 307, 308 */
+        if (err == NGX_HTTP_OFF_3XX
+            || err == NGX_HTTP_OFF_3XX + 1
+            || err == NGX_HTTP_OFF_3XX + 6
+            || err == NGX_HTTP_OFF_3XX + 7)
+        {
+            r->headers_out.content_length_n +=
+                                        sizeof(ngx_http_error_30X_end) - 1
+                                        + r->headers_out.location->value.len;
+
+            /* add length of "http(s)://host:port" if needed */
+            if (r->headers_out.location->value.data[0] == '/'
+                && clcf->absolute_redirect)
+            {
+                /* fix length of hostname if needed */
+                c = r->connection;
+
+                if (clcf->server_name_in_redirect) {
+                    cscf = ngx_http_get_module_srv_conf(r,
+                                                        ngx_http_core_module);
+                    host = cscf->server_name;
+
+                } else if (r->headers_in.server.len) {
+                    host = r->headers_in.server;
+
+                } else {
+                    host.len = NGX_SOCKADDR_STRLEN;
+                    host.data = addr;
+
+                    if (ngx_connection_local_sockaddr(c, &host, 0) != NGX_OK) {
+                        return NGX_ERROR;
+                    }
+                }
+
+                r->headers_out.content_length_n += sizeof("http://") - 1
+                                                   + host.len;
+
+                if (clcf->port_in_redirect) {
+                    port = ngx_inet_get_port(c->local_sockaddr);
+
+#if (NGX_HTTP_SSL)
+                    if (c->ssl) {
+                        r->headers_out.content_length_n += sizeof("s") - 1;
+                        port = (port == 443) ? 0 : port;
+
+                    } else
+#endif
+                        port = (port == 80) ? 0 : port;
+
+                    if (port == 0 ) {
+                        /* do nothing */
+
+                    } else if (port < 10) {
+                        r->headers_out.content_length_n += sizeof(":9") - 1;
+
+                    } else if (port < 100) {
+                        r->headers_out.content_length_n += sizeof(":99") - 1;
+
+                    } else if (port < 1000) {
+                        r->headers_out.content_length_n += sizeof(":999") - 1;
+
+                    } else if (port < 10000) {
+                        r->headers_out.content_length_n += sizeof(":9999") - 1;
+
+                    } else
+                        r->headers_out.content_length_n += sizeof(":65535") - 1;
+                }
+            }
+        }
         if (clcf->msie_padding
             && (r->headers_in.msie || r->headers_in.chrome)
             && r->http_version >= NGX_HTTP_VERSION_10
@@ -745,6 +825,39 @@ ngx_http_send_special_response(ngx_http_request_t *r,
 
     out[0].buf = b;
     out[0].next = &out[1];
+
+    /* 301, 302, 307, 308 */
+    if (err == NGX_HTTP_OFF_3XX
+        || err == NGX_HTTP_OFF_3XX + 1
+        || err == NGX_HTTP_OFF_3XX + 6
+        || err == NGX_HTTP_OFF_3XX + 7)
+    {
+        b = ngx_calloc_buf(r->pool);
+        if (b == NULL) {
+            return NGX_ERROR;
+        }
+
+        b->memory = 1;
+        b->pos = r->headers_out.location->value.data;
+        b->last = r->headers_out.location->value.data
+                  + r->headers_out.location->value.len;
+
+        out[3].buf = b;
+        out[3].next = &out[4];
+
+        b = ngx_calloc_buf(r->pool);
+        if (b == NULL) {
+            return NGX_ERROR;
+        }
+
+        b->memory = 1;
+        b->pos = ngx_http_error_30X_end;
+        b->last = ngx_http_error_30X_end + sizeof(ngx_http_error_30X_end) - 1;
+
+        out[4].buf = b;
+        out[4].next = &out[1];
+        out[0].next = &out[3];
+    }
 
     b = ngx_calloc_buf(r->pool);
     if (b == NULL) {
