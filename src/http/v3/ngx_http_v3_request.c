@@ -715,7 +715,11 @@ ngx_http_v3_validate_header(ngx_http_request_t *r, ngx_str_t *name,
             continue;
         }
 
-        if (ch <= 0x20 || ch == 0x7f || ch == ':'
+        if (ch <= 0x20 || ch == 0x5c || ch == 0x7f
+            || ch == '(' || ch == ')' || ch == ','
+            || ch == '[' || ch == ']' || ch == '"'
+            || ch == '{' || ch == '}'
+            || (ch >= '/' && ch <= '@')
             || (ch >= 'A' && ch <= 'Z'))
         {
             ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
