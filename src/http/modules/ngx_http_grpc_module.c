@@ -3410,15 +3410,17 @@ ngx_http_grpc_validate_header_name(ngx_http_request_t *r, ngx_str_t *s)
     for (i = 0; i < s->len; i++) {
         ch = s->data[i];
 
-        if (ch == ':' && i > 0) {
-            return NGX_ERROR;
+        if (ch == ':' && i == 0) {
+            continue;
         }
 
-        if (ch >= 'A' && ch <= 'Z') {
-            return NGX_ERROR;
-        }
-
-        if (ch <= 0x20 || ch == 0x7f) {
+        if (ch <= 0x20 || ch == 0x5c || ch == 0x7f
+            || ch == '(' || ch == ')' || ch == ','
+            || ch == '[' || ch == ']' || ch == '"'
+            || ch == '{' || ch == '}'
+            || (ch >= '/' && ch <= '@')
+            || (ch >= 'A' && ch <= 'Z'))
+        {
             return NGX_ERROR;
         }
     }
