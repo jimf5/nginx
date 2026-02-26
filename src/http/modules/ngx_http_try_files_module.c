@@ -252,27 +252,36 @@ ngx_http_try_files_handler(ngx_http_request_t *r)
         path.len -= root;
         path.data += root;
 
-        if (!alias) {
-            r->uri = path;
+        len = alias != NGX_MAX_SIZE_T_VALUE ? alias : 0;
 
-        } else if (alias == NGX_MAX_SIZE_T_VALUE) {
-            if (!test_dir) {
-                r->uri = path;
+        if (ngx_strncmp(r->uri.data + len, path.data, path.len) == 0) {
+            if (alias == NGX_MAX_SIZE_T_VALUE && !test_dir) {
                 r->add_uri_to_alias = 1;
             }
 
         } else {
-            name = r->uri.data;
+            if (!alias) {
+                r->uri = path;
 
-            r->uri.len = alias + path.len;
-            r->uri.data = ngx_pnalloc(r->pool, r->uri.len);
-            if (r->uri.data == NULL) {
-                r->uri.len = 0;
-                return NGX_HTTP_INTERNAL_SERVER_ERROR;
+            } else if (alias == NGX_MAX_SIZE_T_VALUE) {
+                if (!test_dir) {
+                    r->uri = path;
+                    r->add_uri_to_alias = 1;
+                }
+
+            } else {
+                name = r->uri.data;
+
+                r->uri.len = alias + path.len;
+                r->uri.data = ngx_pnalloc(r->pool, r->uri.len);
+                if (r->uri.data == NULL) {
+                    r->uri.len = 0;
+                    return NGX_HTTP_INTERNAL_SERVER_ERROR;
+                }
+
+                p = ngx_copy(r->uri.data, name, alias);
+                ngx_memcpy(p, path.data, path.len);
             }
-
-            p = ngx_copy(r->uri.data, name, alias);
-            ngx_memcpy(p, path.data, path.len);
         }
 
         ngx_http_set_exten(r);
